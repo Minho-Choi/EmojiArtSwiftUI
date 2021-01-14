@@ -9,6 +9,7 @@ import SwiftUI
 
 struct EmojiArtDocumentView: View {
     @ObservedObject var document: EmojiArtDocument
+    
     var body: some View {
         VStack {
             ScrollView(.horizontal) {
@@ -30,16 +31,32 @@ struct EmojiArtDocumentView: View {
                             .scaleEffect(zoomScale)
                             .offset(self.panOffset)
                     )
-                        .gesture(self.doubleTapToZoom(in: geometry.size))
+                    // if single tap Gesture is behind the doubletap gesture, reaction slows down
+                    // gesture recognizer is waiting for doubletap time, maybe
+                    // reversed order disables double tap gesture(don't know why)
+                    .gesture(self.doubleTapToZoom(in: geometry.size))
+                    .gesture(tapToDeselect())
+
                     ForEach(self.document.emojis) { emoji in
-                        Text(emoji.text)
-                            .font(animatableWithSize: emoji.fontSize * self.zoomScale)
-                            .position(self.position(for: emoji, in: geometry.size))
+                        Group {
+                            Text(emoji.text)
+                                .font(animatableWithSize: magnification(for: emoji))
+                            Rectangle()
+                                .stroke(emoji.isSelected ? Color.blue : Color.clear)
+                                .frame(width: magnification(for: emoji), height:magnification(for: emoji), alignment: .center)
+                        }.position(self.position(for: emoji, in: geometry.size))
+                        .colorMultiply(emoji.isReadyToRemove ? .red : .white)
+                        .gesture(tapEmojiGesture(emoji: emoji))
+                        .gesture(readyToRemoveGesture(emoji: emoji))
                     }
                 }
                 .clipped()
-                .gesture(zoomGesture())
-                .gesture(panGesture())
+                // order matters!!
+                // if panning is added after the zooming gestures, moving animation does not work
+                .gesture(document.isSelectionExists ? nil : panGesture())
+                .gesture(document.isSelectionExists ? panEachGesture(emojis: document.selectedEmojis()) : nil)
+                .gesture(document.isSelectionExists ? nil : zoomGesture())
+                .gesture(document.isSelectionExists ? zoomEachGesture(emojis: document.selectedEmojis()) : nil)
                 .edgesIgnoringSafeArea([.horizontal, .bottom])
                 .onDrop(of: ["public.image", "public.text"], isTargeted: nil) { providers, location in
                     var location = geometry.convert(location, from: .global)
@@ -53,8 +70,43 @@ struct EmojiArtDocumentView: View {
     }
     private let defaultEmojiSize: CGFloat = 40
     
+    // MARK: - Deselect All
+    
+    private func tapToDeselect() -> some Gesture {
+        TapGesture(count: 1)
+            .onEnded {
+                document.deselectAllEmojis()
+            }
+    }
+    
+    // MARK: - Remove Emoji
+    
+    func readyToRemoveGesture(emoji: EmojiArt.Emoji) -> some Gesture {
+        return LongPressGesture().onEnded { _ in
+            withAnimation(Animation.linear.repeatForever(autoreverses: true)) {
+                document.readyToDeleteEmoji(emoji)
+            }
+        }
+    }
+    
+    func tapEmojiGesture(emoji: EmojiArt.Emoji) -> some Gesture {
+        return TapGesture(count: 1)
+            .onEnded { _ in
+                if emoji.isReadyToRemove {
+                    document.deleteEmoji(emoji)
+                } else {
+                    document.selectEmoji(emoji)
+                }
+        }
+    }
+    
+    
+    
+    // MARK: - Zoom & Pinch Gesture
+    
     @State private var steadyStateZoomScale: CGFloat = 1.0
     @GestureState private var gestureZoomScale: CGFloat = 1.0
+    @GestureState private var gestureEachZoomScale: CGFloat = 1.0
     
     private var zoomScale: CGFloat {
         steadyStateZoomScale * gestureZoomScale
@@ -67,6 +119,18 @@ struct EmojiArtDocumentView: View {
             }
             .onEnded { finalGestureScale in
                 steadyStateZoomScale *= finalGestureScale
+            }
+    }
+    
+    private func zoomEachGesture(emojis: [EmojiArt.Emoji]) -> some Gesture {
+        MagnificationGesture()
+            .updating($gestureEachZoomScale) { latestGestureScale, gestureEachZoomScale, transaction in
+                gestureEachZoomScale = latestGestureScale
+            }
+            .onEnded { finalGestureScale in
+                for emoji in emojis {
+                    document.scaleEmoji(emoji, by: finalGestureScale)
+                }
             }
     }
     
@@ -88,8 +152,19 @@ struct EmojiArtDocumentView: View {
         }
     }
     
+    private func magnification(for emoji: EmojiArt.Emoji) -> CGFloat {
+        var scale = emoji.fontSize * zoomScale
+        if emoji.isSelected {
+            scale *= gestureEachZoomScale
+        }
+        return scale
+    }
+    
+    // MARK: - Pan & Drag Gesture
+    
     @State private var steadyStatePanOffset: CGSize = .zero
     @GestureState private var gesturePanOffset: CGSize = .zero
+    @GestureState private var gestureEachPanOffset: CGSize = .zero
     
     private var panOffset: CGSize {
         (steadyStatePanOffset + gesturePanOffset) * zoomScale
@@ -105,13 +180,31 @@ struct EmojiArtDocumentView: View {
             }
     }
     
+    private func panEachGesture(emojis: [EmojiArt.Emoji]) -> some Gesture {
+        DragGesture()
+            .updating($gestureEachPanOffset) { latestDragGestureValue, gestureEachPanOffset, transaction in
+                gestureEachPanOffset = latestDragGestureValue.translation / self.zoomScale
+            }
+            .onEnded { finalDragGestureValue in
+                for emoji in emojis {
+                    document.moveEmoji(emoji, by: finalDragGestureValue.translation / zoomScale)
+                }
+            }
+    }
+    
     private func position(for emoji: EmojiArt.Emoji, in size: CGSize) -> CGPoint {
         var location = emoji.location
         location = CGPoint(x: location.x * zoomScale, y: location.y * zoomScale)
         location = CGPoint(x: location.x + size.width/2, y: location.y + size.height/2)
         location = CGPoint(x: location.x + panOffset.width, y: location.y + panOffset.height)
+        if emoji.isSelected {
+            location = CGPoint(x: location.x + gestureEachPanOffset.width * zoomScale, y: location.y + gestureEachPanOffset.height * zoomScale)
+        }
         return location
     }
+    
+    // MARK: - Drop
+
     
     private func drop(providers: [NSItemProvider], at location: CGPoint) -> Bool {
         var found = providers.loadFirstObject(ofType: URL.self) { url in

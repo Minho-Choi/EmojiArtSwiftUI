@@ -28,6 +28,10 @@ class EmojiArtDocument: ObservableObject {
     
     var emojis: [EmojiArt.Emoji] { emojiArt.emojis }
     
+    var isSelectionExists: Bool {
+        selectedEmojis().count != 0
+    }
+    
     // MARK: - Intents
     
     func addEmoji(_ emoji: String, at location: CGPoint, size: CGFloat) {
@@ -45,6 +49,26 @@ class EmojiArtDocument: ObservableObject {
         if let index = emojiArt.emojis.firstIndex(matching: emoji) {
             emojiArt.emojis[index].size = Int((CGFloat(emojiArt.emojis[index].size)*scale).rounded(.toNearestOrEven))
         }
+    }
+    
+    func selectEmoji(_ emoji: EmojiArt.Emoji) {
+        emojiArt.toggleEmoji(emoji)
+    }
+    
+    func deselectAllEmojis() {
+        emojiArt.deselectAllEmojis()
+    }
+    
+    func selectedEmojis() -> [EmojiArt.Emoji] {
+        return emojis.filter({$0.isSelected == true})
+    }
+    
+    func readyToDeleteEmoji(_ emoji: EmojiArt.Emoji) {
+        emojiArt.readyToDeleteEmoji(emoji)
+    }
+    
+    func deleteEmoji(_ emoji: EmojiArt.Emoji) {
+        emojiArt.deleteEmoji(emoji)
     }
     
     func setBackgroundURL(_ url: URL?) {
