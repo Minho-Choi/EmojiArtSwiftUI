@@ -9,19 +9,23 @@ import SwiftUI
 
 struct EmojiArtDocumentView: View {
     @ObservedObject var document: EmojiArtDocument
-    
+    @State var chosenPalette: String = ""
     var body: some View {
         VStack {
-            ScrollView(.horizontal) {
-                HStack {
-                    // \. : keypath syntax
-                    ForEach(EmojiArtDocument.palette.map { String($0) }, id: \.self) { emoji in
-                        Text(emoji)
-                            .font(Font.system(size: defaultEmojiSize))
-                            .onDrag { return NSItemProvider(object: emoji as NSString) }
+            HStack {
+                PaletteChooser(document: document, chosenPalette: $chosenPalette)
+                ScrollView(.horizontal) {
+                    HStack {
+                        // \. : keypath syntax
+                        ForEach(chosenPalette.map { String($0) }, id: \.self) { emoji in
+                            Text(emoji)
+                                .font(Font.system(size: defaultEmojiSize))
+                                .onDrag { return NSItemProvider(object: emoji as NSString) }
+                        }
                     }
                 }
-            }.padding(.horizontal)
+                .onAppear { self.chosenPalette = document.defaultPalette }
+            }
             // using overlay or background - sizing problem(match size with foreground view)
             // compare with ZStack(which shrinks view to original image size)
             GeometryReader { geometry in
@@ -36,18 +40,22 @@ struct EmojiArtDocumentView: View {
                     // reversed order disables double tap gesture(don't know why)
                     .gesture(self.doubleTapToZoom(in: geometry.size))
                     .gesture(tapToDeselect())
-
-                    ForEach(self.document.emojis) { emoji in
-                        Group {
-                            Text(emoji.text)
-                                .font(animatableWithSize: magnification(for: emoji))
-                            Rectangle()
-                                .stroke(emoji.isSelected ? Color.blue : Color.clear)
-                                .frame(width: magnification(for: emoji), height:magnification(for: emoji), alignment: .center)
-                        }.position(self.position(for: emoji, in: geometry.size))
-                        .colorMultiply(emoji.isReadyToRemove ? .red : .white)
-                        .gesture(tapEmojiGesture(emoji: emoji))
-                        .gesture(readyToRemoveGesture(emoji: emoji))
+                    
+                    if isLoading {
+                        Image(systemName: "hourglass").imageScale(.large).spinning()
+                    } else {
+                        ForEach(self.document.emojis) { emoji in
+                            Group {
+                                Text(emoji.text)
+                                    .font(animatableWithSize: magnification(for: emoji))
+                                Rectangle()
+                                    .stroke(emoji.isSelected ? Color.blue : Color.clear)
+                                    .frame(width: magnification(for: emoji), height:magnification(for: emoji), alignment: .center)
+                            }.position(self.position(for: emoji, in: geometry.size))
+                            .colorMultiply(emoji.isReadyToRemove ? .red : .white)
+                            .gesture(tapEmojiGesture(emoji: emoji))
+                            .gesture(readyToRemoveGesture(emoji: emoji))
+                        }
                     }
                 }
                 .clipped()
@@ -58,6 +66,9 @@ struct EmojiArtDocumentView: View {
                 .gesture(document.isSelectionExists ? nil : zoomGesture())
                 .gesture(document.isSelectionExists ? zoomEachGesture(emojis: document.selectedEmojis()) : nil)
                 .edgesIgnoringSafeArea([.horizontal, .bottom])
+                .onReceive(self.document.$backgroundImage) { image in
+                    self.zoomToFit(image, in: geometry.size)
+                }
                 .onDrop(of: ["public.image", "public.text"], isTargeted: nil) { providers, location in
                     var location = geometry.convert(location, from: .global)
                     location = CGPoint(x: location.x - geometry.size.width/2, y: location.y - geometry.size.height/2)
@@ -69,6 +80,10 @@ struct EmojiArtDocumentView: View {
         }
     }
     private let defaultEmojiSize: CGFloat = 40
+    
+    var isLoading: Bool {
+        document.backgroundURL != nil && document.backgroundImage == nil
+    }
     
     // MARK: - Deselect All
     
@@ -209,7 +224,7 @@ struct EmojiArtDocumentView: View {
     private func drop(providers: [NSItemProvider], at location: CGPoint) -> Bool {
         var found = providers.loadFirstObject(ofType: URL.self) { url in
             print("dropped \(url)")
-            self.document.setBackgroundURL(url)
+            self.document.backgroundURL = url
         }
         if !found {
             found = providers.loadObjects(ofType: String.self) { string in
